@@ -16,16 +16,21 @@ class MultiChannelLoggerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Multi-Channel Thermocouple Logger")
-        self.root.geometry("1200x800")
+        self.root.geometry("1400x900")
         
         # Serial connection variables
         self.serial_connection = None
         self.is_logging = False
         self.data_queue = queue.Queue()
         
+        # Logger configuration variables
+        self.sample_rate = 1  # Default 1 second
+        self.num_channels = 3  # Default 3 channels
+        self.num_samples = 10   # Default 10 samples per interval
+        
         # Data storage for plotting
         self.timestamps = []
-        self.temp_data = [[], [], []]  # 3 channels
+        self.temp_data = [[], [], [], [], [], [], [], [], [], [], [], []]  # 12 channels max
         self.max_data_points = 1000  # Limit data points for performance
         
         # GUI setup
@@ -51,7 +56,7 @@ class MultiChannelLoggerGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
-        main_frame.rowconfigure(3, weight=1)
+        main_frame.rowconfigure(4, weight=1)
         
         # Connection Settings Frame
         connection_frame = ttk.LabelFrame(main_frame, text="Connection Settings", padding="5")
@@ -73,9 +78,37 @@ class MultiChannelLoggerGUI:
         self.connection_status = ttk.Label(connection_frame, text="Not Connected", foreground="red")
         self.connection_status.grid(row=0, column=4, padx=(10, 0))
         
+        # Logger Configuration Frame
+        config_frame = ttk.LabelFrame(main_frame, text="Logger Configuration", padding="5")
+        config_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        
+        # Sample Rate configuration
+        ttk.Label(config_frame, text="Sample Rate (1-255 sec):").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        self.rate_var = tk.StringVar(value="1")
+        self.rate_entry = ttk.Entry(config_frame, textvariable=self.rate_var, width=10)
+        self.rate_entry.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
+        ttk.Button(config_frame, text="Set Rate", command=self.set_sample_rate).grid(row=0, column=2, padx=(0, 10))
+        
+        # Number of Channels configuration
+        ttk.Label(config_frame, text="Channels (1-12):").grid(row=0, column=3, sticky=tk.W, padx=(10, 5))
+        self.channels_var = tk.StringVar(value="3")
+        self.channels_entry = ttk.Entry(config_frame, textvariable=self.channels_var, width=10)
+        self.channels_entry.grid(row=0, column=4, sticky=tk.W, padx=(0, 10))
+        ttk.Button(config_frame, text="Set Channels", command=self.set_channels).grid(row=0, column=5, padx=(0, 10))
+        
+        # Number of Samples configuration
+        ttk.Label(config_frame, text="Samples (1-20):").grid(row=0, column=6, sticky=tk.W, padx=(10, 5))
+        self.samples_var = tk.StringVar(value="1")
+        self.samples_entry = ttk.Entry(config_frame, textvariable=self.samples_var, width=10)
+        self.samples_entry.grid(row=0, column=7, sticky=tk.W, padx=(0, 10))
+        ttk.Button(config_frame, text="Set Samples", command=self.set_samples).grid(row=0, column=8, padx=(0, 10))
+        
+        # Acquire button
+        ttk.Button(config_frame, text="Acquire Data", command=self.acquire_data).grid(row=0, column=9, padx=(10, 0))
+        
         # Logging Settings Frame
         logging_frame = ttk.LabelFrame(main_frame, text="Logging Settings", padding="5")
-        logging_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        logging_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Filename configuration
         ttk.Label(logging_frame, text="Filename:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
@@ -91,7 +124,7 @@ class MultiChannelLoggerGUI:
         
         # Control buttons frame
         control_frame = ttk.Frame(main_frame)
-        control_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        control_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
         
         # Start/Stop button
         self.start_stop_button = ttk.Button(control_frame, text="Start Logging", command=self.toggle_logging)
@@ -112,12 +145,12 @@ class MultiChannelLoggerGUI:
         
         # Plot frame
         plot_frame = ttk.LabelFrame(main_frame, text="Real-time Temperature Plot", padding="5")
-        plot_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
+        plot_frame.grid(row=4, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=(0, 10))
         plot_frame.columnconfigure(0, weight=1)
         plot_frame.rowconfigure(0, weight=1)
         
         # Create matplotlib figure
-        self.fig = Figure(figsize=(12, 6), dpi=100)
+        self.fig = Figure(figsize=(14, 7), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, plot_frame)
         self.canvas.get_tk_widget().grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -214,14 +247,165 @@ Author: Multi-Channel Logger Team"""
         self.ax.grid(True, alpha=0.3)
         
         # Create line objects for each channel
-        colors = ['red', 'blue', 'green']
+        colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan', 'magenta', 'yellow']
         self.lines = []
-        for i in range(3):
-            line, = self.ax.plot([], [], color=colors[i], label=f'Channel {i+1}', linewidth=2)
+        for i in range(12):  # Support up to 12 channels
+            line, = self.ax.plot([], [], color=colors[i % len(colors)], label=f'Channel {i+1}', linewidth=2)
             self.lines.append(line)
         
         self.ax.legend()
         self.fig.tight_layout()
+    
+    def send_serial_command(self, command):
+        """Send a command to the logger device and return the response"""
+        if not self.serial_connection or not self.serial_connection.is_open:
+            messagebox.showerror("Error", "No serial connection available")
+            return None
+        
+        try:
+            # Send command with newline
+            self.serial_connection.write(f"{command}\n".encode('utf-8'))
+            self.serial_connection.flush()
+            
+            # Wait for response
+            time.sleep(0.1)
+            
+            # Read response
+            response = ""
+            timeout = time.time() + 2.0  # 2 second timeout
+            
+            while time.time() < timeout:
+                if self.serial_connection.in_waiting:
+                    line = self.serial_connection.readline().decode('utf-8').strip()
+                    if line:
+                        response += line + "\n"
+                        if line.endswith("OK") or line.endswith("ERROR"):
+                            break
+                time.sleep(0.01)
+            
+            return response.strip() if response else None
+            
+        except Exception as e:
+            messagebox.showerror("Serial Error", f"Failed to send command: {str(e)}")
+            return None
+    
+    def set_sample_rate(self):
+        """Set the sample rate on the logger device"""
+        try:
+            rate = int(self.rate_var.get())
+            if rate < 1 or rate > 255:
+                messagebox.showerror("Error", "Sample rate must be between 1 and 255 seconds")
+                return
+            
+            response = self.send_serial_command(f"RATE {rate}")
+            if response:
+                if "OK" in response:
+                    self.sample_rate = rate
+                    messagebox.showinfo("Success", f"Sample rate set to {rate} seconds")
+                    self.status_label.config(text=f"Rate: {rate}s")
+                else:
+                    messagebox.showerror("Error", f"Failed to set sample rate: {response}")
+            else:
+                messagebox.showerror("Error", "No response from device")
+                
+        except ValueError:
+            messagebox.showerror("Error", "Please enter a valid number for sample rate")
+    
+    def set_channels(self):
+        """Set the number of channels on the logger device"""
+        try:
+            channels = int(self.channels_var.get())
+            if channels < 1 or channels > 12:
+                messagebox.showerror("Error", "Number of channels must be between 1 and 12")
+                return
+            
+            response = self.send_serial_command(f"CHANNELS {channels}")
+            if response:
+                if "OK" in response:
+                    self.num_channels = channels
+                    messagebox.showinfo("Success", f"Number of channels set to {channels}")
+                    self.status_label.config(text=f"Channels: {channels}")
+                else:
+                    messagebox.showerror("Error", f"Failed to set channels: {response}")
+            else:
+                messagebox.showerror("Error", "No response from device")
+                
+        except ValueError:
+            messagebox.showerror("Error", "Please enter a valid number for channels")
+    
+    def set_samples(self):
+        """Set the number of samples to average on the logger device"""
+        try:
+            samples = int(self.samples_var.get())
+            if samples < 1 or samples > 20:
+                messagebox.showerror("Error", "Number of samples must be between 1 and 20")
+                return
+            
+            response = self.send_serial_command(f"SAMPLES {samples}")
+            if response:
+                if "OK" in response:
+                    self.num_samples = samples
+                    messagebox.showinfo("Success", f"Number of samples set to {samples}")
+                    self.status_label.config(text=f"Samples: {samples}")
+                else:
+                    messagebox.showerror("Error", f"Failed to set samples: {response}")
+            else:
+                messagebox.showerror("Error", "No response from device")
+                
+        except ValueError:
+            messagebox.showerror("Error", "Please enter a valid number for samples")
+    
+    def acquire_data(self):
+        """Acquire a single reading from the logger device"""
+        response = self.send_serial_command("ACQUIRE")
+        if response:
+            if "ERROR" in response:
+                messagebox.showerror("Error", f"Acquire failed: {response}")
+            else:
+                # Parse the response for temperature values
+                try:
+                    # Expected format: "TEMP: val1,val2,val3,..." or similar
+                    if "TEMP:" in response or "DATA:" in response:
+                        # Extract temperature values
+                        parts = response.split(":")
+                        if len(parts) > 1:
+                            temp_str = parts[1].strip()
+                            temp_values = [float(x.strip()) for x in temp_str.split(",")]
+                            
+                            # Update plot data
+                            timestamp = datetime.now()
+                            self.timestamps.append(timestamp)
+                            
+                            # Ensure we have enough channels
+                            while len(self.temp_data) < len(temp_values):
+                                self.temp_data.append([])
+                            
+                            # Add temperature values
+                            for i, temp in enumerate(temp_values):
+                                if i < len(self.temp_data):
+                                    self.temp_data[i].append(temp)
+                            
+                            # Limit data points
+                            if len(self.timestamps) > self.max_data_points:
+                                self.timestamps.pop(0)
+                                for data in self.temp_data:
+                                    if data:
+                                        data.pop(0)
+                            
+                            messagebox.showinfo("Acquire Success", 
+                                f"Acquired {len(temp_values)} temperature readings:\n" + 
+                                "\n".join([f"Channel {i+1}: {temp:.2f}°C" for i, temp in enumerate(temp_values)]))
+                            
+                            self.status_label.config(text=f"Last Acquire: {len(temp_values)} channels")
+                        else:
+                            messagebox.showinfo("Acquire Response", response)
+                    else:
+                        messagebox.showinfo("Acquire Response", response)
+                        
+                except Exception as e:
+                    messagebox.showinfo("Acquire Response", f"Response: {response}\nParse error: {str(e)}")
+        else:
+            messagebox.showerror("Error", "No response from device")
     
     def update_com_ports(self):
         """Update the list of available COM ports"""
@@ -302,12 +486,19 @@ Author: Multi-Channel Logger Team"""
             self.serial_connection = serial.Serial(port, 9600, timeout=1)
             time.sleep(2)  # Give Arduino time to reset
             
+            # Send START command to begin data acquisition
+            response = self.send_serial_command("START")
+            if response and "ERROR" in response:
+                messagebox.showerror("Error", f"Failed to start logger: {response}")
+                self.stop_logging()
+                return
+            
             # Open CSV file
             self.csv_file = open(filename, 'w', newline='')
             self.csv_writer = csv.writer(self.csv_file)
             
-            # Write header
-            headers = ['Timestamp'] + [f'Temp{i}' for i in range(1, 4)]
+            # Write header with variable number of channels
+            headers = ['Timestamp'] + [f'Temp{i}' for i in range(1, self.num_channels + 1)]
             self.csv_writer.writerow(headers)
             
             # Start logging thread
@@ -362,7 +553,8 @@ Author: Multi-Channel Logger Team"""
         """Process a line of data from the serial connection"""
         try:
             values = line.split(',')
-            if len(values) == 3:
+            # Handle variable number of channels (1 to 12)
+            if 1 <= len(values) <= 12:
                 timestamp = datetime.now()
                 timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
                 
@@ -385,7 +577,7 @@ Author: Multi-Channel Logger Team"""
                 
                 # Update status
                 self.root.after(0, lambda: self.status_label.config(
-                    text=f"Last: {timestamp_str} - {temp_values}"
+                    text=f"Last: {timestamp_str} - {len(temp_values)} channels"
                 ))
                 
         except Exception as e:
@@ -430,10 +622,10 @@ Author: Multi-Channel Logger Team"""
                 relative_times = [(t - start_time).total_seconds() for t in self.timestamps]
                 
                 # Plot each channel
-                colors = ['red', 'blue', 'green']
+                colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown', 'pink', 'gray', 'olive', 'cyan', 'magenta', 'yellow']
                 for i, data in enumerate(self.temp_data):
                     if data and len(data) == len(relative_times):
-                        self.ax.plot(relative_times, data, color=colors[i], 
+                        self.ax.plot(relative_times, data, color=colors[i % len(colors)], 
                                    label=f'Channel {i+1}', linewidth=2)
             
             # Update canvas
@@ -519,8 +711,11 @@ Author: Multi-Channel Logger Team"""
         with open(filename, 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
             
-            # Write header
-            writer.writerow(['Timestamp', 'Time_Seconds', 'Temp1', 'Temp2', 'Temp3'])
+            # Write header with variable number of channels
+            header = ['Timestamp', 'Time_Seconds']
+            for i in range(1, max(len(self.temp_data), self.num_channels) + 1):
+                header.append(f'Temp{i}')
+            writer.writerow(header)
             
             # Write data
             if self.timestamps:
@@ -531,9 +726,9 @@ Author: Multi-Channel Logger Team"""
                            f"{relative_time:.3f}"]
                     
                     # Add temperature values
-                    for channel_data in self.temp_data:
-                        if i < len(channel_data):
-                            row.append(f"{channel_data[i]:.3f}")
+                    for j in range(max(len(self.temp_data), self.num_channels)):
+                        if j < len(self.temp_data) and i < len(self.temp_data[j]):
+                            row.append(f"{self.temp_data[j][i]:.3f}")
                         else:
                             row.append("")
                     
@@ -552,11 +747,16 @@ Author: Multi-Channel Logger Team"""
                     relative_time = (timestamp - start_time).total_seconds()
                     row = {
                         'Timestamp': timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3],
-                        'Time_Seconds': relative_time,
-                        'Temp1': self.temp_data[0][i] if i < len(self.temp_data[0]) else None,
-                        'Temp2': self.temp_data[1][i] if i < len(self.temp_data[1]) else None,
-                        'Temp3': self.temp_data[2][i] if i < len(self.temp_data[2]) else None
+                        'Time_Seconds': relative_time
                     }
+                    
+                    # Add temperature values for variable number of channels
+                    for j in range(max(len(self.temp_data), self.num_channels)):
+                        if j < len(self.temp_data) and i < len(self.temp_data[j]):
+                            row[f'Temp{j+1}'] = self.temp_data[j][i]
+                        else:
+                            row[f'Temp{j+1}'] = None
+                    
                     data.append(row)
             
             # Create DataFrame and save
@@ -576,7 +776,7 @@ Author: Multi-Channel Logger Team"""
             'metadata': {
                 'export_time': datetime.now().isoformat(),
                 'total_points': len(self.timestamps),
-                'channels': 3
+                'channels': max(len(self.temp_data), self.num_channels)
             },
             'data': []
         }
@@ -585,14 +785,19 @@ Author: Multi-Channel Logger Team"""
             start_time = self.timestamps[0]
             for i, timestamp in enumerate(self.timestamps):
                 relative_time = (timestamp - start_time).total_seconds()
+                temperatures = []
+                
+                # Add temperature values for variable number of channels
+                for j in range(max(len(self.temp_data), self.num_channels)):
+                    if j < len(self.temp_data) and i < len(self.temp_data[j]):
+                        temperatures.append(self.temp_data[j][i])
+                    else:
+                        temperatures.append(None)
+                
                 point = {
                     'timestamp': timestamp.isoformat(),
                     'time_seconds': relative_time,
-                    'temperatures': [
-                        self.temp_data[0][i] if i < len(self.temp_data[0]) else None,
-                        self.temp_data[1][i] if i < len(self.temp_data[1]) else None,
-                        self.temp_data[2][i] if i < len(self.temp_data[2]) else None
-                    ]
+                    'temperatures': temperatures
                 }
                 data['data'].append(point)
         

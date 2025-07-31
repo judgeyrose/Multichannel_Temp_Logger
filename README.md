@@ -1,17 +1,20 @@
 # Multi-Channel Thermocouple Logger
 
-A Python application for logging temperature data from multiple thermocouple channels via Arduino with a modern GUI interface and real-time plotting capabilities.
+A Python application for logging temperature data from multiple thermocouple channels via Arduino with a modern GUI interface, real-time plotting capabilities, and comprehensive serial communication protocol.
 
 ## Features
 
 - **Modern GUI Interface**: Easy-to-use graphical interface built with tkinter
+- **Serial Communication Protocol**: Comprehensive command set for embedded device control
 - **COM Port Configuration**: Automatic detection and selection of available COM ports
-- **Connection Testing**: Built-in connection test to verify Arduino communication
+- **Connection Testing**: Built-in connection test to verify device communication
 - **Real-time Plotting**: Live temperature graphs for all channels using matplotlib
 - **Flexible File Management**: Custom filename selection with auto-fill timestamp option
 - **Multi-threaded Operation**: Non-blocking GUI with background data processing
 - **Data Validation**: Robust error handling and data validation
 - **Performance Optimized**: Efficient plotting with configurable data point limits
+- **Variable Channel Support**: Support for 1-12 thermocouple channels
+- **Configurable Sampling**: Adjustable sample rates and averaging
 
 ## Requirements
 
@@ -35,21 +38,28 @@ A Python application for logging temperature data from multiple thermocouple cha
    ```
 
 2. **Configure Connection**:
-   - Select your Arduino's COM port from the dropdown
+   - Select your device's COM port from the dropdown
    - Click "Refresh Ports" if your port isn't listed
    - Click "Test Connection" to verify communication
 
-3. **Set Logging Parameters**:
+3. **Configure Logger Settings**:
+   - **Sample Rate**: Set time between samples (1-255 seconds)
+   - **Channels**: Set number of thermocouple channels (1-12)
+   - **Samples**: Set number of readings to average (1-20)
+   - Click respective "Set" buttons to configure the device
+
+4. **Set Logging Parameters**:
    - Use "Auto-fill" to generate a timestamped filename
    - Or click "Browse" to choose a custom location
    - Modify the filename as needed
 
-4. **Start Logging**:
+5. **Start Logging**:
    - Click "Start Logging" to begin data collection
    - Watch real-time temperature plots update
    - Monitor status in the bottom status bar
 
-5. **Control Options**:
+6. **Control Options**:
+   - "Acquire Data" for immediate single reading
    - "Stop Logging" to end data collection
    - "Clear Plot" to reset the graph
    - Close the application to exit
@@ -59,8 +69,14 @@ A Python application for logging temperature data from multiple thermocouple cha
 ### Connection Settings
 - **COM Port Selection**: Dropdown with available serial ports
 - **Refresh Ports**: Update the list of available ports
-- **Test Connection**: Verify Arduino communication
+- **Test Connection**: Verify device communication
 - **Connection Status**: Visual indicator of connection state
+
+### Logger Configuration
+- **Sample Rate**: Set time between samples (1-255 seconds)
+- **Channels**: Set number of thermocouple channels (1-12)
+- **Samples**: Set number of readings to average (1-20)
+- **Acquire Data**: Take immediate single reading
 
 ### Logging Settings
 - **Filename Entry**: Custom filename with timestamp auto-fill
@@ -79,16 +95,27 @@ A Python application for logging temperature data from multiple thermocouple cha
 - **Auto-scaling**: Dynamic axis adjustment
 - **Legend**: Channel identification
 
-## Data Format
+## Serial Communication Protocol
 
-The application expects Arduino data in CSV format:
+The application uses a comprehensive serial communication protocol to control the embedded logger device. See `SERIAL_COMMANDS.md` for complete protocol documentation.
+
+### Key Commands
+- **START**: Begin continuous data acquisition
+- **RATE <1-255>**: Set sample rate in seconds
+- **CHANNELS <1-12>**: Set number of thermocouple channels
+- **SAMPLES <1-20>**: Set number of readings to average
+- **ACQUIRE**: Take immediate single reading
+
+### Data Format
+
+The application expects device data in CSV format:
 ```
-temperature1,temperature2,temperature3
+temperature1,temperature2,temperature3,...
 ```
 
 Example:
 ```
-23.5,24.1,22.8
+23.5,24.1,22.8,25.3
 ```
 
 ## Output Files
@@ -100,38 +127,58 @@ Timestamp,Temp1,Temp2,Temp3
 2024-01-15 14:30:26,23.6,24.2,22.9
 ```
 
-## Arduino Code Requirements
+## Embedded Device Requirements
 
-Your Arduino should send data in the following format:
-```cpp
-// Example Arduino code structure
-void loop() {
-  float temp1 = readThermocouple1();
-  float temp2 = readThermocouple2();
-  float temp3 = readThermocouple3();
-  
-  Serial.print(temp1);
-  Serial.print(",");
-  Serial.print(temp2);
-  Serial.print(",");
-  Serial.println(temp3);
-  
-  delay(1000); // Adjust as needed
-}
+Your embedded device should implement the serial communication protocol defined in `SERIAL_COMMANDS.md`. The device should:
+
+1. **Respond to Commands**: Handle START, RATE, CHANNELS, SAMPLES, and ACQUIRE commands
+2. **Send Data**: Output temperature values in comma-delimited format
+3. **Validate Parameters**: Ensure parameters are within specified ranges
+4. **Provide Error Handling**: Respond with appropriate error messages
+
+### Example Device Response Format
 ```
+RATE 5
+RATE OK
+
+CHANNELS 4
+CHANNELS OK
+
+START
+START OK
+
+25.6,30.2,22.8,28.4
+25.7,30.1,22.9,28.3
+...
+
+ACQUIRE
+TEMP: 25.6,30.2,22.8,28.4
+```
+
+## Testing
+
+Use the included test script to verify your embedded device communication:
+
+```bash
+python test_serial.py
+```
+
+This script will test all serial commands and help identify any communication issues.
 
 ## Troubleshooting
 
 ### Connection Issues
-- Ensure Arduino is connected and powered
+- Ensure device is connected and powered
 - Check COM port selection
-- Verify Arduino code is running
+- Verify device firmware is running
 - Try "Test Connection" button
+- Run `test_serial.py` to debug communication
 
 ### No Data Display
-- Check Arduino serial output format
+- Check device serial output format
 - Verify baud rate (9600)
-- Ensure Arduino is sending data
+- Ensure device is responding to commands
+- Check command responses in `test_serial.py`
 
 ### Performance Issues
 - Reduce `max_data_points` in code for better performance
