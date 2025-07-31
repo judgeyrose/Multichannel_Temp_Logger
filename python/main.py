@@ -284,16 +284,32 @@ Author: Multi-Channel Logger Team"""
         self.ax.legend()
         self.fig.tight_layout()
     
-    def send_serial_command(self, command):
+    def send_serial_command(self, command, use_existing_connection=True):
         """Send a command to the logger device and return the response"""
-        if not self.serial_connection or not self.serial_connection.is_open:
-            messagebox.showerror("Error", "No serial connection available")
-            return None
+        temp_connection = None
         
         try:
+            # Use existing connection if available and requested
+            if use_existing_connection and self.serial_connection and self.serial_connection.is_open:
+                connection = self.serial_connection
+            else:
+                # Create temporary connection for configuration commands
+                port = self.com_port_var.get()
+                if not port:
+                    messagebox.showerror("Error", "Please select a COM port")
+                    return None
+                
+                try:
+                    temp_connection = serial.Serial(port, 9600, timeout=1)
+                    time.sleep(0.5)  # Give Arduino time to reset
+                    connection = temp_connection
+                except Exception as e:
+                    messagebox.showerror("Connection Error", f"Failed to connect to {port}: {str(e)}")
+                    return None
+            
             # Send command with newline
-            self.serial_connection.write(f"{command}\n".encode('utf-8'))
-            self.serial_connection.flush()
+            connection.write(f"{command}\n".encode('utf-8'))
+            connection.flush()
             
             # Wait for response
             time.sleep(0.1)
@@ -303,8 +319,8 @@ Author: Multi-Channel Logger Team"""
             timeout = time.time() + 2.0  # 2 second timeout
             
             while time.time() < timeout:
-                if self.serial_connection.in_waiting:
-                    line = self.serial_connection.readline().decode('utf-8').strip()
+                if connection.in_waiting:
+                    line = connection.readline().decode('utf-8').strip()
                     if line:
                         response += line + "\n"
                         if line.endswith("OK") or line.endswith("ERROR"):
@@ -316,6 +332,10 @@ Author: Multi-Channel Logger Team"""
         except Exception as e:
             messagebox.showerror("Serial Error", f"Failed to send command: {str(e)}")
             return None
+        finally:
+            # Close temporary connection if we created one
+            if temp_connection:
+                temp_connection.close()
     
     def set_sample_rate(self):
         """Set the sample rate on the logger device"""
@@ -325,7 +345,7 @@ Author: Multi-Channel Logger Team"""
                 messagebox.showerror("Error", "Sample rate must be between 1 and 255 seconds")
                 return
             
-            response = self.send_serial_command(f"RATE {rate}")
+            response = self.send_serial_command(f"RATE {rate}", use_existing_connection=False)
             if response:
                 if "OK" in response:
                     self.sample_rate = rate
@@ -347,7 +367,7 @@ Author: Multi-Channel Logger Team"""
                 messagebox.showerror("Error", "Number of channels must be between 1 and 12")
                 return
             
-            response = self.send_serial_command(f"CHANNELS {channels}")
+            response = self.send_serial_command(f"CHANNELS {channels}", use_existing_connection=False)
             if response:
                 if "OK" in response:
                     self.num_channels = channels
@@ -369,7 +389,7 @@ Author: Multi-Channel Logger Team"""
                 messagebox.showerror("Error", "Number of samples must be between 1 and 20")
                 return
             
-            response = self.send_serial_command(f"SAMPLES {samples}")
+            response = self.send_serial_command(f"SAMPLES {samples}", use_existing_connection=False)
             if response:
                 if "OK" in response:
                     self.num_samples = samples
@@ -385,7 +405,7 @@ Author: Multi-Channel Logger Team"""
     
     def acquire_data(self):
         """Acquire a single reading from the logger device"""
-        response = self.send_serial_command("ACQUIRE")
+        response = self.send_serial_command("ACQUIRE", use_existing_connection=False)
         if response:
             if "ERROR" in response:
                 messagebox.showerror("Error", f"Acquire failed: {response}")
@@ -456,20 +476,32 @@ Author: Multi-Channel Logger Team"""
             test_ser = serial.Serial(port, 9600, timeout=1)
             time.sleep(2)  # Give Arduino time to reset
             
-            # Try to read a line
-            if test_ser.in_waiting:
-                line = test_ser.readline().decode('utf-8').strip()
-                if line:
-                    messagebox.showinfo("Success", f"Connection successful!\nReceived: {line}")
-                    self.connection_status.config(text="Connected", foreground="green")
-                else:
-                    messagebox.showwarning("Warning", "Connected but no data received")
-                    self.connection_status.config(text="Connected (No Data)", foreground="orange")
-            else:
-                messagebox.showwarning("Warning", "Connected but no data available")
-                self.connection_status.config(text="Connected (No Data)", foreground="orange")
+            # Send a simple command to test response
+            test_ser.write("RATE\n".encode('utf-8'))
+            test_ser.flush()
+            time.sleep(0.5)
+            
+            # Try to read response
+            response = ""
+            timeout = time.time() + 2.0
+            
+            while time.time() < timeout:
+                if test_ser.in_waiting:
+                    line = test_ser.readline().decode('utf-8').strip()
+                    if line:
+                        response += line + "\n"
+                        if "RATE" in line or "OK" in line or "ERROR" in line:
+                            break
+                time.sleep(0.01)
             
             test_ser.close()
+            
+            if response.strip():
+                messagebox.showinfo("Success", f"Connection successful!\nDevice responded: {response.strip()}")
+                self.connection_status.config(text="Connected", foreground="green")
+            else:
+                messagebox.showwarning("Warning", "Connected but no response received")
+                self.connection_status.config(text="Connected (No Response)", foreground="orange")
             
         except Exception as e:
             messagebox.showerror("Connection Error", f"Failed to connect: {str(e)}")

@@ -25,7 +25,13 @@ A Python application for logging temperature data from multiple thermocouple cha
 ## Installation
 
 1. Clone or download this repository
-2. Install required packages:
+2. Create and activate a virtual environment (recommended):
+   ```bash
+   python -m venv .venv
+   .venv\Scripts\activate  # Windows
+   source .venv/bin/activate  # Linux/Mac
+   ```
+3. Install required packages:
    ```bash
    pip install -r requirements.txt
    ```
@@ -36,6 +42,27 @@ A Python application for logging temperature data from multiple thermocouple cha
    ```bash
    python main.py
    ```
+
+## Building an Executable
+
+To create a standalone executable (.exe) file:
+
+1. **Navigate to the build folder**:
+   ```bash
+   cd build
+   ```
+
+2. **Build using the batch file** (Windows):
+   - Double-click `build_exe.bat`
+
+3. **Or build manually**:
+   ```bash
+   python build_exe.py
+   ```
+
+4. **Find the executable** in the `../dist` folder
+
+See `build/README.md` for detailed build instructions.
 
 2. **Configure Connection**:
    - Select your device's COM port from the dropdown

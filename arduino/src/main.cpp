@@ -30,7 +30,7 @@ void setMuxChannel(int channel) {
 }
 
 void readTemperatures(double* temperatures) {
-  for (int ch = 1; ch < numChannels; ch++) {
+  for (int ch = 1; ch < numChannels + 1; ch++) {
     setMuxChannel(ch);
     delay(100);  // Let MUX settle
 
@@ -55,9 +55,9 @@ void readTemperatures(double* temperatures) {
 }
 
 void printTemperatures(double* temperatures) {
-  for (int ch = 0; ch < numChannels; ch++) {
+  for (int ch = 1; ch < numChannels + 1; ch++) {
     Serial.print(temperatures[ch], 2);
-    if (ch < numChannels - 1) Serial.print(",");
+    if (ch < numChannels) Serial.print(",");
   }
   Serial.println();
 }
