@@ -31,7 +31,11 @@ class MultiChannelLoggerGUI:
         # Data storage for plotting
         self.timestamps = []
         self.temp_data = [[], [], [], [], [], [], [], [], [], [], [], []]  # 12 channels max
-        self.max_data_points = 1000  # Limit data points for performance
+        # Performance configuration
+        # Increase this value for longer logging sessions, but be aware of memory usage
+        # 10,000 points = ~2.8 hours at 1s intervals, ~28 hours at 10s intervals
+        # 100,000 points = ~28 hours at 1s intervals, ~11.6 days at 10s intervals
+        self.max_data_points = 50000  # Limit data points for performance (~13 hrs @ 1s intervals, 5 days @ 10s intervals)
         
         # GUI setup
         self.setup_gui()
@@ -98,7 +102,7 @@ class MultiChannelLoggerGUI:
         
         # Number of Samples configuration
         ttk.Label(config_frame, text="Samples (1-20):").grid(row=0, column=6, sticky=tk.W, padx=(10, 5))
-        self.samples_var = tk.StringVar(value="1")
+        self.samples_var = tk.StringVar(value="10")
         self.samples_entry = ttk.Entry(config_frame, textvariable=self.samples_var, width=10)
         self.samples_entry.grid(row=0, column=7, sticky=tk.W, padx=(0, 10))
         ttk.Button(config_frame, text="Set Samples", command=self.set_samples).grid(row=0, column=8, padx=(0, 10))
@@ -195,10 +199,18 @@ class MultiChannelLoggerGUI:
             messagebox.showwarning("Warning", "No data to export. Start logging first.")
             return
         
+        import os
+        
+        # Create Results folder if it doesn't exist
+        results_folder = "Results"
+        if not os.path.exists(results_folder):
+            os.makedirs(results_folder)
+        
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"temperature_data_{timestamp}.csv"
-        self._export_to_csv(filename)
-        messagebox.showinfo("Success", f"Data exported to: {filename}")
+        filepath = os.path.join(results_folder, filename)
+        self._export_to_csv(filepath)
+        messagebox.showinfo("Success", f"Data exported to: {results_folder}/{filename}")
     
     def _export_to_excel_direct(self):
         """Export data directly to Excel with default filename"""
@@ -206,10 +218,18 @@ class MultiChannelLoggerGUI:
             messagebox.showwarning("Warning", "No data to export. Start logging first.")
             return
         
+        import os
+        
+        # Create Results folder if it doesn't exist
+        results_folder = "Results"
+        if not os.path.exists(results_folder):
+            os.makedirs(results_folder)
+        
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"temperature_data_{timestamp}.xlsx"
-        self._export_to_excel(filename)
-        messagebox.showinfo("Success", f"Data exported to: {filename}")
+        filepath = os.path.join(results_folder, filename)
+        self._export_to_excel(filepath)
+        messagebox.showinfo("Success", f"Data exported to: {results_folder}/{filename}")
     
     def _export_to_json_direct(self):
         """Export data directly to JSON with default filename"""
@@ -217,10 +237,18 @@ class MultiChannelLoggerGUI:
             messagebox.showwarning("Warning", "No data to export. Start logging first.")
             return
         
+        import os
+        
+        # Create Results folder if it doesn't exist
+        results_folder = "Results"
+        if not os.path.exists(results_folder):
+            os.makedirs(results_folder)
+        
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"temperature_data_{timestamp}.json"
-        self._export_to_json(filename)
-        messagebox.showinfo("Success", f"Data exported to: {filename}")
+        filepath = os.path.join(results_folder, filename)
+        self._export_to_json(filepath)
+        messagebox.showinfo("Success", f"Data exported to: {results_folder}/{filename}")
     
     def show_about(self):
         """Show about dialog"""
@@ -385,12 +413,14 @@ Author: Multi-Channel Logger Team"""
                                 if i < len(self.temp_data):
                                     self.temp_data[i].append(temp)
                             
-                            # Limit data points
+                            # Limit data points (optimized for larger datasets)
                             if len(self.timestamps) > self.max_data_points:
-                                self.timestamps.pop(0)
-                                for data in self.temp_data:
+                                # Remove oldest 10% of data points for efficiency
+                                remove_count = max(1, self.max_data_points // 10)
+                                self.timestamps = self.timestamps[remove_count:]
+                                for i, data in enumerate(self.temp_data):
                                     if data:
-                                        data.pop(0)
+                                        self.temp_data[i] = data[remove_count:]
                             
                             messagebox.showinfo("Acquire Success", 
                                 f"Acquired {len(temp_values)} temperature readings:\n" + 
@@ -447,15 +477,30 @@ Author: Multi-Channel Logger Team"""
     
     def auto_fill_filename(self):
         """Auto-fill filename with timestamp"""
+        import os
+        
+        # Create Results folder if it doesn't exist
+        results_folder = "Results"
+        if not os.path.exists(results_folder):
+            os.makedirs(results_folder)
+        
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"thermocouple_data_{timestamp}.csv"
+        filename = os.path.join(results_folder, f"thermocouple_data_{timestamp}.csv")
         self.filename_var.set(filename)
     
     def browse_filename(self):
         """Open file dialog to select save location"""
+        import os
+        
+        # Set initial directory to Results folder
+        initial_dir = "Results"
+        if not os.path.exists(initial_dir):
+            os.makedirs(initial_dir)
+        
         filename = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+            initialdir=initial_dir,
             initialvalue=self.filename_var.get()
         )
         if filename:
@@ -595,12 +640,14 @@ Author: Multi-Channel Logger Team"""
                     if i < len(self.temp_data):
                         self.temp_data[i].append(temp)
                 
-                # Limit data points for performance
+                # Limit data points for performance (optimized for larger datasets)
                 if len(self.timestamps) > self.max_data_points:
-                    self.timestamps.pop(0)
-                    for data in self.temp_data:
+                    # Remove oldest 10% of data points for efficiency
+                    remove_count = max(1, self.max_data_points // 10)
+                    self.timestamps = self.timestamps[remove_count:]
+                    for i, data in enumerate(self.temp_data):
                         if data:
-                            data.pop(0)
+                            self.temp_data[i] = data[remove_count:]
                 
             except queue.Empty:
                 continue
@@ -635,7 +682,7 @@ Author: Multi-Channel Logger Team"""
         self.root.after(100, self.update_plot)  # Update every 100ms
     
     def save_plot(self):
-        """Save plot to current directory without dialog"""
+        """Save plot to Results folder without dialog"""
         if not self.timestamps:
             messagebox.showwarning("Warning", "No data to save. Start logging first.")
             return
@@ -643,20 +690,27 @@ Author: Multi-Channel Logger Team"""
         try:
             import os
             
+            # Create Results folder if it doesn't exist
+            results_folder = "Results"
+            if not os.path.exists(results_folder):
+                os.makedirs(results_folder)
+            
             # Generate filename with timestamp
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"temperature_plot_{timestamp}.png"
             
-            # Save to current directory
-            self.fig.savefig(filename, dpi=300, bbox_inches='tight')
+            # Save to Results folder
+            filepath = os.path.join(results_folder, filename)
+            self.fig.savefig(filepath, dpi=300, bbox_inches='tight')
             
             # Get absolute path
-            abs_path = os.path.abspath(filename)
+            abs_path = os.path.abspath(filepath)
             
             messagebox.showinfo("Save Plot", 
                 f"Plot saved successfully!\n\n"
                 f"File: {filename}\n"
-                f"Location: {os.getcwd()}\n\n"
+                f"Location: {results_folder}\n"
+                f"Full path: {abs_path}\n\n"
                 f"Total data points: {len(self.timestamps)}")
             
             print(f"Plot saved: {abs_path}")
@@ -671,9 +725,16 @@ Author: Multi-Channel Logger Team"""
             messagebox.showwarning("Warning", "No data to export. Start logging first.")
             return
         
+        import os
+        
+        # Create Results folder if it doesn't exist
+        results_folder = "Results"
+        if not os.path.exists(results_folder):
+            os.makedirs(results_folder)
+        
         # Generate default filename with timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        default_filename = f"temperature_data_{timestamp}.csv"
+        default_filename = os.path.join(results_folder, f"temperature_data_{timestamp}.csv")
         
         # Open file dialog
         filename = filedialog.asksaveasfilename(
@@ -684,6 +745,7 @@ Author: Multi-Channel Logger Team"""
                 ("JSON files", "*.json"),
                 ("All files", "*.*")
             ],
+            initialdir=results_folder,
             initialvalue=default_filename
         )
         
