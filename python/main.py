@@ -11,6 +11,15 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
 import queue
+from enum import Enum
+
+class ConnectionState(Enum):
+    """Connection state enumeration"""
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    ERROR = "error"
+    LOGGING = "logging"
 
 class MultiChannelLoggerGUI:
     def __init__(self, root):
@@ -20,13 +29,18 @@ class MultiChannelLoggerGUI:
         
         # Serial connection variables
         self.serial_connection = None
+        self.connection_state = ConnectionState.DISCONNECTED
         self.is_logging = False
         self.data_queue = queue.Queue()
+        self.connection_lock = threading.Lock()  # Thread-safe connection operations
         
         # Logger configuration variables
         self.sample_rate = 1  # Default 1 second
         self.num_channels = 3  # Default 3 channels
         self.num_samples = 10   # Default 10 samples per interval
+        
+        # Save folder configuration
+        self.save_folder = "Results"  # Default save folder
         
         # Data storage for plotting
         self.timestamps = []
@@ -47,6 +61,9 @@ class MultiChannelLoggerGUI:
         
         # Start plot update
         self.update_plot()
+        
+        # Handle window closing
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
     
     def setup_gui(self):
         # Create menu bar
@@ -76,11 +93,16 @@ class MultiChannelLoggerGUI:
         ttk.Button(connection_frame, text="Refresh Ports", command=self.update_com_ports).grid(row=0, column=2, padx=(0, 10))
         
         # Test connection button
-        ttk.Button(connection_frame, text="Test Connection", command=self.test_connection).grid(row=0, column=3, padx=(0, 10))
+        self.test_button = ttk.Button(connection_frame, text="Test Connection", command=self.test_connection)
+        self.test_button.grid(row=0, column=3, padx=(0, 10))
         
         # Connection status
         self.connection_status = ttk.Label(connection_frame, text="Not Connected", foreground="red")
         self.connection_status.grid(row=0, column=4, padx=(10, 0))
+        
+        # Connect/Disconnect button
+        self.connect_button = ttk.Button(connection_frame, text="Connect", command=self.toggle_connection)
+        self.connect_button.grid(row=0, column=5, padx=(10, 0))
         
         # Logger Configuration Frame
         config_frame = ttk.LabelFrame(main_frame, text="Logger Configuration", padding="5")
@@ -91,40 +113,51 @@ class MultiChannelLoggerGUI:
         self.rate_var = tk.StringVar(value="1")
         self.rate_entry = ttk.Entry(config_frame, textvariable=self.rate_var, width=10)
         self.rate_entry.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
-        ttk.Button(config_frame, text="Set Rate", command=self.set_sample_rate).grid(row=0, column=2, padx=(0, 10))
+        self.rate_button = ttk.Button(config_frame, text="Set Rate", command=self.set_sample_rate)
+        self.rate_button.grid(row=0, column=2, padx=(0, 10))
         
         # Number of Channels configuration
         ttk.Label(config_frame, text="Channels (1-12):").grid(row=0, column=3, sticky=tk.W, padx=(10, 5))
         self.channels_var = tk.StringVar(value="3")
         self.channels_entry = ttk.Entry(config_frame, textvariable=self.channels_var, width=10)
         self.channels_entry.grid(row=0, column=4, sticky=tk.W, padx=(0, 10))
-        ttk.Button(config_frame, text="Set Channels", command=self.set_channels).grid(row=0, column=5, padx=(0, 10))
+        self.channels_button = ttk.Button(config_frame, text="Set Channels", command=self.set_channels)
+        self.channels_button.grid(row=0, column=5, padx=(0, 10))
         
         # Number of Samples configuration
         ttk.Label(config_frame, text="Samples (1-20):").grid(row=0, column=6, sticky=tk.W, padx=(10, 5))
         self.samples_var = tk.StringVar(value="10")
         self.samples_entry = ttk.Entry(config_frame, textvariable=self.samples_var, width=10)
         self.samples_entry.grid(row=0, column=7, sticky=tk.W, padx=(0, 10))
-        ttk.Button(config_frame, text="Set Samples", command=self.set_samples).grid(row=0, column=8, padx=(0, 10))
+        self.samples_button = ttk.Button(config_frame, text="Set Samples", command=self.set_samples)
+        self.samples_button.grid(row=0, column=8, padx=(0, 10))
         
         # Acquire button
-        ttk.Button(config_frame, text="Acquire Data", command=self.acquire_data).grid(row=0, column=9, padx=(10, 0))
+        self.acquire_button = ttk.Button(config_frame, text="Acquire Data", command=self.acquire_data)
+        self.acquire_button.grid(row=0, column=9, padx=(10, 0))
         
         # Logging Settings Frame
         logging_frame = ttk.LabelFrame(main_frame, text="Logging Settings", padding="5")
         logging_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
+        logging_frame.columnconfigure(1, weight=1)  # Allow entry fields to expand
+        
+        # Save folder configuration
+        ttk.Label(logging_frame, text="Save Folder:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        self.save_folder_var = tk.StringVar(value="Results")
+        self.save_folder_entry = ttk.Entry(logging_frame, textvariable=self.save_folder_var, width=40)
+        self.save_folder_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 10))
+        
+        # Browse folder button
+        ttk.Button(logging_frame, text="Browse", command=self.browse_save_folder).grid(row=0, column=2, padx=(0, 10))
         
         # Filename configuration
-        ttk.Label(logging_frame, text="Filename:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
+        ttk.Label(logging_frame, text="Filename:").grid(row=1, column=0, sticky=tk.W, padx=(0, 5), pady=(5, 0))
         self.filename_var = tk.StringVar()
         self.filename_entry = ttk.Entry(logging_frame, textvariable=self.filename_var, width=40)
-        self.filename_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 10))
+        self.filename_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), padx=(0, 10), pady=(5, 0))
         
-        # Browse button
-        ttk.Button(logging_frame, text="Browse", command=self.browse_filename).grid(row=0, column=2, padx=(0, 10))
-        
-        # Auto-fill filename button
-        ttk.Button(logging_frame, text="Auto-fill", command=self.auto_fill_filename).grid(row=0, column=3)
+        # Auto-fill filename button (aligned with Browse button)
+        ttk.Button(logging_frame, text="Auto-fill", command=self.auto_fill_filename).grid(row=1, column=2, pady=(5, 0))
         
         # Control buttons frame
         control_frame = ttk.Frame(main_frame)
@@ -162,8 +195,16 @@ class MultiChannelLoggerGUI:
         # Setup plot
         self.setup_plot()
         
+        # Initialize save folder
+        import os
+        if not os.path.exists(self.save_folder):
+            os.makedirs(self.save_folder)
+        
         # Auto-fill filename on startup
         self.auto_fill_filename()
+        
+        # Initialize UI state based on connection
+        self.update_ui_state()
     
     def create_menu(self):
         """Create the application menu bar"""
@@ -201,16 +242,14 @@ class MultiChannelLoggerGUI:
         
         import os
         
-        # Create Results folder if it doesn't exist
-        results_folder = "Results"
-        if not os.path.exists(results_folder):
-            os.makedirs(results_folder)
+        # Get save folder
+        save_folder = self.get_save_folder()
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"temperature_data_{timestamp}.csv"
-        filepath = os.path.join(results_folder, filename)
+        filepath = os.path.join(save_folder, filename)
         self._export_to_csv(filepath)
-        messagebox.showinfo("Success", f"Data exported to: {results_folder}/{filename}")
+        messagebox.showinfo("Success", f"Data exported to: {save_folder}/{filename}")
     
     def _export_to_excel_direct(self):
         """Export data directly to Excel with default filename"""
@@ -220,16 +259,14 @@ class MultiChannelLoggerGUI:
         
         import os
         
-        # Create Results folder if it doesn't exist
-        results_folder = "Results"
-        if not os.path.exists(results_folder):
-            os.makedirs(results_folder)
+        # Get save folder
+        save_folder = self.get_save_folder()
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"temperature_data_{timestamp}.xlsx"
-        filepath = os.path.join(results_folder, filename)
+        filepath = os.path.join(save_folder, filename)
         self._export_to_excel(filepath)
-        messagebox.showinfo("Success", f"Data exported to: {results_folder}/{filename}")
+        messagebox.showinfo("Success", f"Data exported to: {save_folder}/{filename}")
     
     def _export_to_json_direct(self):
         """Export data directly to JSON with default filename"""
@@ -239,16 +276,14 @@ class MultiChannelLoggerGUI:
         
         import os
         
-        # Create Results folder if it doesn't exist
-        results_folder = "Results"
-        if not os.path.exists(results_folder):
-            os.makedirs(results_folder)
+        # Get save folder
+        save_folder = self.get_save_folder()
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"temperature_data_{timestamp}.json"
-        filepath = os.path.join(results_folder, filename)
+        filepath = os.path.join(save_folder, filename)
         self._export_to_json(filepath)
-        messagebox.showinfo("Success", f"Data exported to: {results_folder}/{filename}")
+        messagebox.showinfo("Success", f"Data exported to: {save_folder}/{filename}")
     
     def show_about(self):
         """Show about dialog"""
@@ -284,9 +319,30 @@ Author: Multi-Channel Logger Team"""
         self.ax.legend()
         self.fig.tight_layout()
     
-    def send_serial_command(self, command, use_existing_connection=True):
-        """Send a command to the logger device and return the response"""
+    def is_connected(self):
+        """Check if device is connected and connection is valid"""
+        with self.connection_lock:
+            return (self.connection_state in [ConnectionState.CONNECTED, ConnectionState.LOGGING] and
+                    self.serial_connection is not None and
+                    self.serial_connection.is_open)
+    
+    def validate_connection(self, show_error=True):
+        """Validate that device is connected before operations"""
+        if not self.is_connected():
+            if show_error:
+                messagebox.showerror("Not Connected", 
+                    "Device is not connected. Please connect to the device first.")
+            return False
+        return True
+    
+    def send_serial_command(self, command, use_existing_connection=True, timeout=3.0):
+        """Send a command to the logger device and return the response with robust error handling"""
         temp_connection = None
+        
+        # Validate connection if using existing connection
+        if use_existing_connection:
+            if not self.validate_connection(show_error=False):
+                return None
         
         try:
             # Use existing connection if available and requested
@@ -296,56 +352,110 @@ Author: Multi-Channel Logger Team"""
                 # Create temporary connection for configuration commands
                 port = self.com_port_var.get()
                 if not port:
-                    messagebox.showerror("Error", "Please select a COM port")
+                    if not use_existing_connection:  # Only show error for explicit temp connections
+                        messagebox.showerror("Error", "Please select a COM port")
                     return None
                 
                 try:
                     temp_connection = serial.Serial(port, 9600, timeout=1)
                     time.sleep(0.5)  # Give Arduino time to reset
                     connection = temp_connection
+                except serial.SerialException as e:
+                    if not use_existing_connection:
+                        messagebox.showerror("Connection Error", 
+                            f"Failed to connect to {port}:\n{str(e)}\n\n"
+                            f"Please ensure the device is connected and the correct COM port is selected.")
+                    return None
                 except Exception as e:
-                    messagebox.showerror("Connection Error", f"Failed to connect to {port}: {str(e)}")
+                    if not use_existing_connection:
+                        messagebox.showerror("Connection Error", f"Failed to connect to {port}: {str(e)}")
                     return None
             
-            # Send command with newline
-            connection.write(f"{command}\n".encode('utf-8'))
-            connection.flush()
+            # Check if connection is still valid
+            if not connection.is_open:
+                if not use_existing_connection:
+                    messagebox.showerror("Connection Error", "Connection is not open")
+                return None
             
-            # Wait for response
+            # Send command with newline
+            try:
+                connection.write(f"{command}\n".encode('utf-8'))
+                connection.flush()
+            except (serial.SerialTimeoutException, serial.SerialException, OSError) as e:
+                if not use_existing_connection:
+                    messagebox.showerror("Serial Error", 
+                        f"Failed to send command:\n{str(e)}\n\n"
+                        f"The device may have been disconnected.")
+                # Update connection state if using existing connection
+                if use_existing_connection:
+                    self.set_connection_state(ConnectionState.ERROR)
+                return None
+            
+            # Wait for response with timeout
             time.sleep(0.1)
             
-            # Read response
+            # Read response with proper timeout handling
             response = ""
-            timeout = time.time() + 2.0  # 2 second timeout
+            start_time = time.time()
+            timeout_end = start_time + timeout
             
-            while time.time() < timeout:
-                if connection.in_waiting:
-                    line = connection.readline().decode('utf-8').strip()
-                    if line:
-                        response += line + "\n"
-                        if line.endswith("OK") or line.endswith("ERROR"):
-                            break
-                time.sleep(0.01)
+            while time.time() < timeout_end:
+                try:
+                    if connection.in_waiting:
+                        line = connection.readline().decode('utf-8', errors='ignore').strip()
+                        if line:
+                            response += line + "\n"
+                            # Check for completion markers
+                            if line.endswith("OK") or line.endswith("ERROR") or "ERROR:" in line:
+                                break
+                    time.sleep(0.01)
+                except (serial.SerialException, OSError, UnicodeDecodeError) as e:
+                    if not use_existing_connection:
+                        messagebox.showerror("Serial Error", 
+                            f"Error reading response:\n{str(e)}\n\n"
+                            f"The device may have been disconnected.")
+                    if use_existing_connection:
+                        self.set_connection_state(ConnectionState.ERROR)
+                    return None
+            
+            # Check if we got a timeout
+            if not response and time.time() >= timeout_end:
+                if not use_existing_connection:
+                    messagebox.showwarning("Timeout", 
+                        f"No response received from device within {timeout} seconds.\n\n"
+                        f"Command: {command}\n"
+                        f"Please check the device connection and try again.")
+                return None
             
             return response.strip() if response else None
             
         except Exception as e:
-            messagebox.showerror("Serial Error", f"Failed to send command: {str(e)}")
+            if not use_existing_connection:
+                messagebox.showerror("Serial Error", 
+                    f"Unexpected error sending command:\n{str(e)}")
+            if use_existing_connection:
+                self.set_connection_state(ConnectionState.ERROR)
             return None
         finally:
             # Close temporary connection if we created one
-            if temp_connection:
-                temp_connection.close()
+            if temp_connection and temp_connection.is_open:
+                try:
+                    temp_connection.close()
+                except:
+                    pass
     
     def set_sample_rate(self):
         """Set the sample rate on the logger device"""
+        if not self.validate_connection():
+            return
+        
         try:
             rate = int(self.rate_var.get())
             if rate < 1 or rate > 255:
                 messagebox.showerror("Error", "Sample rate must be between 1 and 255 seconds")
                 return
             
-            response = self.send_serial_command(f"RATE {rate}", use_existing_connection=False)
+            response = self.send_serial_command(f"RATE {rate}", use_existing_connection=True)
             if response:
                 if "OK" in response:
                     self.sample_rate = rate
@@ -361,13 +471,16 @@ Author: Multi-Channel Logger Team"""
     
     def set_channels(self):
         """Set the number of channels on the logger device"""
+        if not self.validate_connection():
+            return
+        
         try:
             channels = int(self.channels_var.get())
             if channels < 1 or channels > 12:
                 messagebox.showerror("Error", "Number of channels must be between 1 and 12")
                 return
             
-            response = self.send_serial_command(f"CHANNELS {channels}", use_existing_connection=False)
+            response = self.send_serial_command(f"CHANNELS {channels}", use_existing_connection=True)
             if response:
                 if "OK" in response:
                     self.num_channels = channels
@@ -383,13 +496,16 @@ Author: Multi-Channel Logger Team"""
     
     def set_samples(self):
         """Set the number of samples to average on the logger device"""
+        if not self.validate_connection():
+            return
+        
         try:
             samples = int(self.samples_var.get())
             if samples < 1 or samples > 20:
                 messagebox.showerror("Error", "Number of samples must be between 1 and 20")
                 return
             
-            response = self.send_serial_command(f"SAMPLES {samples}", use_existing_connection=False)
+            response = self.send_serial_command(f"SAMPLES {samples}", use_existing_connection=True)
             if response:
                 if "OK" in response:
                     self.num_samples = samples
@@ -405,7 +521,10 @@ Author: Multi-Channel Logger Team"""
     
     def acquire_data(self):
         """Acquire a single reading from the logger device"""
-        response = self.send_serial_command("ACQUIRE", use_existing_connection=False)
+        if not self.validate_connection():
+            return
+        
+        response = self.send_serial_command("ACQUIRE", use_existing_connection=True)
         if response:
             if "ERROR" in response:
                 messagebox.showerror("Error", f"Acquire failed: {response}")
@@ -457,15 +576,188 @@ Author: Multi-Channel Logger Team"""
         else:
             messagebox.showerror("Error", "No response from device")
     
+    def set_connection_state(self, state):
+        """Update connection state and UI"""
+        with self.connection_lock:
+            self.connection_state = state
+        self.root.after(0, self.update_ui_state)
+    
+    def update_ui_state(self):
+        """Update UI elements based on connection state"""
+        is_connected = self.is_connected()
+        is_logging = self.is_logging
+        
+        # Update connection status label
+        if self.connection_state == ConnectionState.CONNECTED:
+            self.connection_status.config(text="Connected", foreground="green")
+            self.connect_button.config(text="Disconnect", state="normal")
+        elif self.connection_state == ConnectionState.LOGGING:
+            self.connection_status.config(text="Logging", foreground="blue")
+            self.connect_button.config(text="Disconnect", state="normal")
+        elif self.connection_state == ConnectionState.CONNECTING:
+            self.connection_status.config(text="Connecting...", foreground="orange")
+            self.connect_button.config(text="Connecting...", state="disabled")
+        elif self.connection_state == ConnectionState.ERROR:
+            self.connection_status.config(text="Connection Error", foreground="red")
+            self.connect_button.config(text="Connect", state="normal")
+        else:  # DISCONNECTED
+            self.connection_status.config(text="Not Connected", foreground="red")
+            self.connect_button.config(text="Connect", state="normal")
+        
+        # Enable/disable controls based on connection state
+        # Configuration controls - only enabled when connected but not logging
+        config_enabled = is_connected and not is_logging
+        
+        # Update entry fields
+        entry_state = "normal" if config_enabled else "disabled"
+        self.rate_entry.config(state=entry_state)
+        self.channels_entry.config(state=entry_state)
+        self.samples_entry.config(state=entry_state)
+        
+        # Update configuration buttons
+        button_state = "normal" if config_enabled else "disabled"
+        if hasattr(self, 'rate_button'):
+            self.rate_button.config(state=button_state)
+        if hasattr(self, 'channels_button'):
+            self.channels_button.config(state=button_state)
+        if hasattr(self, 'samples_button'):
+            self.samples_button.config(state=button_state)
+        if hasattr(self, 'acquire_button'):
+            self.acquire_button.config(state=button_state)
+        
+        # COM port selection - disabled when connected
+        self.com_port_combo.config(state="readonly" if not is_connected else "disabled")
+        
+        # Test connection button - only when not connected
+        if hasattr(self, 'test_button'):
+            self.test_button.config(state="normal" if not is_connected else "disabled")
+        
+        # Start/Stop logging button - enabled when connected (or when logging to allow stop)
+        if hasattr(self, 'start_stop_button'):
+            if is_logging:
+                self.start_stop_button.config(state="normal", text="Stop Logging")
+            elif is_connected:
+                self.start_stop_button.config(state="normal", text="Start Logging")
+            else:
+                self.start_stop_button.config(state="disabled", text="Start Logging")
+    
+    def toggle_connection(self):
+        """Connect or disconnect from the device"""
+        if self.is_connected():
+            self.disconnect_device()
+        else:
+            self.connect_device()
+    
+    def connect_device(self):
+        """Establish connection to the device"""
+        port = self.com_port_var.get()
+        if not port:
+            messagebox.showerror("Error", "Please select a COM port")
+            return
+        
+        if self.is_connected():
+            messagebox.showinfo("Info", "Already connected to device")
+            return
+        
+        self.set_connection_state(ConnectionState.CONNECTING)
+        
+        try:
+            # Try to open connection in a separate thread to avoid blocking UI
+            def connect_thread():
+                try:
+                    with self.connection_lock:
+                        if self.serial_connection and self.serial_connection.is_open:
+                            self.serial_connection.close()
+                        
+                        self.serial_connection = serial.Serial(port, 9600, timeout=1)
+                        time.sleep(2)  # Give Arduino time to reset
+                    
+                    # Test the connection
+                    test_response = self.send_serial_command("RATE", use_existing_connection=True, timeout=2.0)
+                    
+                    if test_response is not None:
+                        self.set_connection_state(ConnectionState.CONNECTED)
+                        self.root.after(0, lambda: messagebox.showinfo("Success", 
+                            f"Successfully connected to {port}"))
+                    else:
+                        # Connection opened but no response
+                        with self.connection_lock:
+                            if self.serial_connection:
+                                self.serial_connection.close()
+                                self.serial_connection = None
+                        self.set_connection_state(ConnectionState.ERROR)
+                        self.root.after(0, lambda: messagebox.showwarning("Warning", 
+                            f"Connected to {port} but device did not respond.\n"
+                            f"Please check the device and try again."))
+                
+                except serial.SerialException as e:
+                    with self.connection_lock:
+                        if self.serial_connection:
+                            try:
+                                self.serial_connection.close()
+                            except:
+                                pass
+                            self.serial_connection = None
+                    self.set_connection_state(ConnectionState.ERROR)
+                    self.root.after(0, lambda: messagebox.showerror("Connection Error", 
+                        f"Failed to connect to {port}:\n{str(e)}\n\n"
+                        f"Please ensure:\n"
+                        f"- The device is powered on\n"
+                        f"- The correct COM port is selected\n"
+                        f"- No other program is using the port"))
+                except Exception as e:
+                    with self.connection_lock:
+                        if self.serial_connection:
+                            try:
+                                self.serial_connection.close()
+                            except:
+                                pass
+                            self.serial_connection = None
+                    self.set_connection_state(ConnectionState.ERROR)
+                    self.root.after(0, lambda: messagebox.showerror("Connection Error", 
+                        f"Unexpected error connecting to device:\n{str(e)}"))
+            
+            threading.Thread(target=connect_thread, daemon=True).start()
+        
+        except Exception as e:
+            self.set_connection_state(ConnectionState.ERROR)
+            messagebox.showerror("Connection Error", f"Failed to initiate connection: {str(e)}")
+    
+    def disconnect_device(self):
+        """Disconnect from the device"""
+        if self.is_logging:
+            result = messagebox.askyesno("Logging Active", 
+                "Logging is currently active. Stop logging before disconnecting?\n\n"
+                "Click Yes to stop logging and disconnect, or No to cancel.")
+            if result:
+                self.stop_logging()
+            else:
+                return
+        
+        with self.connection_lock:
+            if self.serial_connection and self.serial_connection.is_open:
+                try:
+                    self.serial_connection.close()
+                except:
+                    pass
+            self.serial_connection = None
+        
+        self.set_connection_state(ConnectionState.DISCONNECTED)
+        messagebox.showinfo("Disconnected", "Disconnected from device")
+    
     def update_com_ports(self):
         """Update the list of available COM ports"""
         ports = [port.device for port in serial.tools.list_ports.comports()]
         self.com_port_combo['values'] = ports
-        if ports:
+        if ports and not self.com_port_var.get():
             self.com_port_combo.set(ports[0])
     
     def test_connection(self):
         """Test the serial connection"""
+        if self.is_connected():
+            messagebox.showinfo("Info", "Already connected to device. Use 'Connect' button to manage connection.")
+            return
+        
         port = self.com_port_var.get()
         if not port:
             messagebox.showerror("Error", "Please select a COM port")
@@ -487,7 +779,7 @@ Author: Multi-Channel Logger Team"""
             
             while time.time() < timeout:
                 if test_ser.in_waiting:
-                    line = test_ser.readline().decode('utf-8').strip()
+                    line = test_ser.readline().decode('utf-8', errors='ignore').strip()
                     if line:
                         response += line + "\n"
                         if "RATE" in line or "OK" in line or "ERROR" in line:
@@ -497,46 +789,120 @@ Author: Multi-Channel Logger Team"""
             test_ser.close()
             
             if response.strip():
-                messagebox.showinfo("Success", f"Connection successful!\nDevice responded: {response.strip()}")
-                self.connection_status.config(text="Connected", foreground="green")
+                messagebox.showinfo("Success", 
+                    f"Connection test successful!\n\n"
+                    f"Port: {port}\n"
+                    f"Device responded: {response.strip()}\n\n"
+                    f"Click 'Connect' to establish a persistent connection.")
             else:
-                messagebox.showwarning("Warning", "Connected but no response received")
-                self.connection_status.config(text="Connected (No Response)", foreground="orange")
+                messagebox.showwarning("Warning", 
+                    f"Connected to {port} but no response received.\n\n"
+                    f"Please check:\n"
+                    f"- Device is powered on\n"
+                    f"- Correct COM port selected\n"
+                    f"- Device firmware is running")
             
+        except serial.SerialException as e:
+            messagebox.showerror("Connection Error", 
+                f"Failed to connect to {port}:\n{str(e)}\n\n"
+                f"Please ensure:\n"
+                f"- The device is powered on\n"
+                f"- The correct COM port is selected\n"
+                f"- No other program is using the port")
         except Exception as e:
-            messagebox.showerror("Connection Error", f"Failed to connect: {str(e)}")
-            self.connection_status.config(text="Connection Failed", foreground="red")
+            messagebox.showerror("Connection Error", f"Unexpected error: {str(e)}")
+    
+    def get_save_folder(self):
+        """Get the current save folder, creating it if it doesn't exist"""
+        import os
+        
+        # Get folder from entry or use default
+        folder = self.save_folder_var.get().strip()
+        if not folder:
+            folder = "Results"
+            self.save_folder_var.set(folder)
+        
+        # Create folder if it doesn't exist
+        if not os.path.exists(folder):
+            try:
+                os.makedirs(folder)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to create save folder:\n{str(e)}")
+                # Fall back to default
+                folder = "Results"
+                self.save_folder_var.set(folder)
+                if not os.path.exists(folder):
+                    os.makedirs(folder)
+        
+        self.save_folder = folder
+        return folder
+    
+    def browse_save_folder(self):
+        """Open folder dialog to select save directory"""
+        import os
+        
+        # Get current folder or use default
+        current_folder = self.save_folder_var.get().strip()
+        if not current_folder or not os.path.exists(current_folder):
+            current_folder = os.path.abspath("Results")
+            if not os.path.exists(current_folder):
+                current_folder = os.getcwd()
+        
+        # Open folder selection dialog
+        folder = filedialog.askdirectory(
+            title="Select Save Folder",
+            initialdir=current_folder
+        )
+        
+        if folder:
+            # Normalize the path
+            folder = os.path.normpath(folder)
+            self.save_folder_var.set(folder)
+            self.save_folder = folder
+            
+            # Update filename if it exists to use new folder
+            current_filename = self.filename_var.get()
+            if current_filename:
+                # Extract just the filename from the path
+                filename_only = os.path.basename(current_filename)
+                new_path = os.path.join(folder, filename_only)
+                self.filename_var.set(new_path)
     
     def auto_fill_filename(self):
         """Auto-fill filename with timestamp"""
         import os
         
-        # Create Results folder if it doesn't exist
-        results_folder = "Results"
-        if not os.path.exists(results_folder):
-            os.makedirs(results_folder)
+        # Get save folder
+        save_folder = self.get_save_folder()
         
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = os.path.join(results_folder, f"thermocouple_data_{timestamp}.csv")
+        filename = os.path.join(save_folder, f"thermocouple_data_{timestamp}.csv")
         self.filename_var.set(filename)
     
     def browse_filename(self):
         """Open file dialog to select save location"""
         import os
         
-        # Set initial directory to Results folder
-        initial_dir = "Results"
-        if not os.path.exists(initial_dir):
-            os.makedirs(initial_dir)
+        # Get save folder
+        save_folder = self.get_save_folder()
+        
+        # Get current filename if set
+        current_filename = self.filename_var.get()
+        initial_value = current_filename if current_filename else ""
         
         filename = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
-            initialdir=initial_dir,
-            initialvalue=self.filename_var.get()
+            initialdir=save_folder,
+            initialvalue=initial_value
         )
         if filename:
             self.filename_var.set(filename)
+            # Update save folder to match the selected file's directory
+            file_folder = os.path.dirname(filename)
+            if file_folder:
+                self.save_folder_var.set(file_folder)
+                self.save_folder = file_folder
     
     def toggle_logging(self):
         """Start or stop logging"""
@@ -547,27 +913,19 @@ Author: Multi-Channel Logger Team"""
     
     def start_logging(self):
         """Start the logging process"""
-        port = self.com_port_var.get()
-        filename = self.filename_var.get()
-        
-        if not port:
-            messagebox.showerror("Error", "Please select a COM port")
+        if not self.validate_connection():
             return
         
+        filename = self.filename_var.get()
         if not filename:
             messagebox.showerror("Error", "Please enter a filename")
             return
         
         try:
-            # Open serial connection
-            self.serial_connection = serial.Serial(port, 9600, timeout=1)
-            time.sleep(2)  # Give Arduino time to reset
-            
             # Send START command to begin data acquisition
-            response = self.send_serial_command("START")
+            response = self.send_serial_command("START", use_existing_connection=True)
             if response and "ERROR" in response:
                 messagebox.showerror("Error", f"Failed to start logger: {response}")
-                self.stop_logging()
                 return
             
             # Open CSV file
@@ -580,13 +938,13 @@ Author: Multi-Channel Logger Team"""
             
             # Start logging thread
             self.is_logging = True
+            self.set_connection_state(ConnectionState.LOGGING)
             self.logging_thread = threading.Thread(target=self.logging_loop, daemon=True)
             self.logging_thread.start()
             
             # Update UI
             self.start_stop_button.config(text="Stop Logging")
             self.status_label.config(text="Logging...")
-            self.connection_status.config(text="Connected", foreground="green")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to start logging: {str(e)}")
@@ -596,35 +954,75 @@ Author: Multi-Channel Logger Team"""
         """Stop the logging process"""
         self.is_logging = False
         
-        # Close serial connection
-        if self.serial_connection:
-            self.serial_connection.close()
-            self.serial_connection = None
+        # Try to send STOP command if connected
+        if self.is_connected():
+            try:
+                # Some devices might have a STOP command, but we'll just stop reading
+                pass
+            except:
+                pass
         
         # Close CSV file
         if hasattr(self, 'csv_file'):
-            self.csv_file.close()
+            try:
+                self.csv_file.close()
+            except:
+                pass
+        
+        # Update connection state (back to connected if still connected, or disconnected)
+        if self.is_connected():
+            self.set_connection_state(ConnectionState.CONNECTED)
+        else:
+            self.set_connection_state(ConnectionState.DISCONNECTED)
         
         # Update UI
         self.start_stop_button.config(text="Start Logging")
         self.status_label.config(text="Ready")
-        self.connection_status.config(text="Not Connected", foreground="red")
     
     def logging_loop(self):
-        """Main logging loop"""
-        while self.is_logging and self.serial_connection:
+        """Main logging loop with connection monitoring"""
+        consecutive_errors = 0
+        max_consecutive_errors = 10
+        
+        while self.is_logging:
             try:
-                if self.serial_connection.in_waiting:
-                    line = self.serial_connection.readline().decode('utf-8').strip()
+                # Check if connection is still valid
+                if not self.is_connected():
+                    self.root.after(0, lambda: messagebox.showerror("Connection Lost", 
+                        "Connection to device was lost during logging.\nLogging has been stopped."))
+                    break
+                
+                if self.serial_connection and self.serial_connection.in_waiting:
+                    line = self.serial_connection.readline().decode('utf-8', errors='ignore').strip()
                     if line:
                         # Process the data
                         self.process_line(line)
+                        consecutive_errors = 0  # Reset error counter on successful read
+                else:
+                    # Small sleep to prevent busy waiting
+                    time.sleep(0.01)
                         
+            except (serial.SerialException, OSError, UnicodeDecodeError) as e:
+                consecutive_errors += 1
+                print(f"Error in logging loop: {e} (consecutive errors: {consecutive_errors})")
+                
+                if consecutive_errors >= max_consecutive_errors:
+                    self.root.after(0, lambda: messagebox.showerror("Connection Error", 
+                        f"Multiple connection errors detected.\n"
+                        f"Logging has been stopped.\n\n"
+                        f"Error: {str(e)}"))
+                    break
+                time.sleep(0.1)  # Brief pause before retry
             except Exception as e:
-                print(f"Error in logging loop: {e}")
-                break
+                print(f"Unexpected error in logging loop: {e}")
+                consecutive_errors += 1
+                if consecutive_errors >= max_consecutive_errors:
+                    break
+                time.sleep(0.1)
         
-        self.stop_logging()
+        # Stop logging if loop exits
+        if self.is_logging:
+            self.root.after(0, self.stop_logging)
     
     def process_line(self, line):
         """Process a line of data from the serial connection"""
@@ -714,7 +1112,7 @@ Author: Multi-Channel Logger Team"""
         self.root.after(100, self.update_plot)  # Update every 100ms
     
     def save_plot(self):
-        """Save plot to Results folder without dialog"""
+        """Save plot to selected save folder without dialog"""
         if not self.timestamps:
             messagebox.showwarning("Warning", "No data to save. Start logging first.")
             return
@@ -722,17 +1120,15 @@ Author: Multi-Channel Logger Team"""
         try:
             import os
             
-            # Create Results folder if it doesn't exist
-            results_folder = "Results"
-            if not os.path.exists(results_folder):
-                os.makedirs(results_folder)
+            # Get save folder
+            save_folder = self.get_save_folder()
             
             # Generate filename with timestamp
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             filename = f"temperature_plot_{timestamp}.png"
             
-            # Save to Results folder
-            filepath = os.path.join(results_folder, filename)
+            # Save to selected folder
+            filepath = os.path.join(save_folder, filename)
             self.fig.savefig(filepath, dpi=300, bbox_inches='tight')
             
             # Get absolute path
@@ -741,7 +1137,7 @@ Author: Multi-Channel Logger Team"""
             messagebox.showinfo("Save Plot", 
                 f"Plot saved successfully!\n\n"
                 f"File: {filename}\n"
-                f"Location: {results_folder}\n"
+                f"Location: {save_folder}\n"
                 f"Full path: {abs_path}\n\n"
                 f"Total data points: {len(self.timestamps)}")
             
@@ -759,14 +1155,12 @@ Author: Multi-Channel Logger Team"""
         
         import os
         
-        # Create Results folder if it doesn't exist
-        results_folder = "Results"
-        if not os.path.exists(results_folder):
-            os.makedirs(results_folder)
+        # Get save folder
+        save_folder = self.get_save_folder()
         
         # Generate default filename with timestamp
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        default_filename = os.path.join(results_folder, f"temperature_data_{timestamp}.csv")
+        default_filename = os.path.join(save_folder, f"temperature_data_{timestamp}.csv")
         
         # Open file dialog
         filename = filedialog.asksaveasfilename(
@@ -777,12 +1171,18 @@ Author: Multi-Channel Logger Team"""
                 ("JSON files", "*.json"),
                 ("All files", "*.*")
             ],
-            initialdir=results_folder,
+            initialdir=save_folder,
             initialvalue=default_filename
         )
         
         if filename:
             try:
+                # Update save folder to match the selected file's directory
+                file_folder = os.path.dirname(filename)
+                if file_folder:
+                    self.save_folder_var.set(file_folder)
+                    self.save_folder = file_folder
+                
                 file_ext = filename.lower().split('.')[-1]
                 
                 if file_ext == 'csv':
@@ -909,6 +1309,32 @@ Author: Multi-Channel Logger Team"""
         self.ax.clear()
         self.setup_plot()
         self.canvas.draw()
+    
+    def on_closing(self):
+        """Handle window closing - cleanup connections and stop logging"""
+        # Stop logging if active
+        if self.is_logging:
+            result = messagebox.askyesno("Logging Active", 
+                "Logging is currently active. Stop logging and exit?\n\n"
+                "Click Yes to stop logging and exit, or No to cancel.")
+            if not result:
+                return
+            self.stop_logging()
+        
+        # Disconnect from device
+        if self.is_connected():
+            with self.connection_lock:
+                if self.serial_connection and self.serial_connection.is_open:
+                    try:
+                        self.serial_connection.close()
+                    except:
+                        pass
+                self.serial_connection = None
+            self.set_connection_state(ConnectionState.DISCONNECTED)
+        
+        # Close the window
+        self.root.quit()
+        self.root.destroy()
 
 def main():
     root = tk.Tk()
